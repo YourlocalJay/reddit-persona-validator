@@ -53,3 +53,7 @@ interface:
     port: 8000
     log_level: "INFO"
     cors_origins: ["*"]
+
+    analysis:
+  default_analyzer: "deepseek"  # deepseek|claude
+  mock_mode: False
