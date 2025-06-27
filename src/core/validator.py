@@ -5,7 +5,7 @@ import time
 import logging
 import yaml
 from pathlib import Path
-from typing import Dict, Optional, Tuple, List, Any, Union
+from typing import Dict, Optional, Tuple, List, Any, Union, Type
 from dataclasses import dataclass
 
 from ..utils.proxy_rotator import ProxyRotator
@@ -13,6 +13,10 @@ from ..utils.cookie_manager import CookieManager
 from .browser_engine import BrowserEngine
 from .email_verifier import EmailVerifier, VerificationResult
 from ..analysis.scorer import PersonaScorer
+from ..analysis.base_analyzer import BaseAnalyzer
+from ..analysis.deepseek_analyzer import DeepSeekAnalyzer
+from ..analysis.claude_analyzer import ClaudeAnalyzer
+from ..analysis.mock_analyzer import MockAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -137,23 +141,56 @@ class RedditPersonaValidator:
         return self.email_verifier
     
     def _init_persona_scorer(self) -> PersonaScorer:
-        """Lazy initialization of persona scorer."""
+        """
+        Lazy initialization of persona scorer with AI configuration.
+        
+        Returns:
+            Configured PersonaScorer instance
+        """
         if self.persona_scorer is None:
+            # Get analysis configuration
             analysis_config = self.config.get("analysis", {})
-            analyzer_type = analysis_config.get("default_analyzer", "deepseek")
+            ai_config = self.config.get("ai", {})
+            
+            # Determine analyzer type and fallback
+            analyzer_type = ai_config.get("default_analyzer") or analysis_config.get("default_analyzer", "deepseek")
+            fallback_analyzer = ai_config.get("fallback_analyzer", "mock")
             mock_mode = analysis_config.get("mock_mode", False)
             
+            # Extract scoring weights
+            scoring_weights = ai_config.get("weights", {})
+            
+            # Configure caching
+            cache_enabled = ai_config.get("cache_results", False) or analysis_config.get("cache_enabled", False)
+            cache_expiry = ai_config.get("cache_expiry", 86400)  # Default: 24 hours
+            
+            # Initialize scorer with configuration
             self.persona_scorer = PersonaScorer(
                 analyzer_type=analyzer_type,
-                mock_mode=mock_mode
+                mock_mode=mock_mode,
+                fallback_analyzer=fallback_analyzer,
+                scoring_weights=scoring_weights
             )
+            
+            # Configure additional options
+            if hasattr(self.persona_scorer, "set_cache_options") and callable(getattr(self.persona_scorer, "set_cache_options")):
+                self.persona_scorer.set_cache_options(
+                    enabled=cache_enabled,
+                    expiry=cache_expiry,
+                    cache_dir=analysis_config.get("cache_dir", ".cache/analysis")
+                )
+                
+            logger.info(f"Initialized PersonaScorer with {analyzer_type} analyzer (fallback: {fallback_analyzer})")
+            
         return self.persona_scorer
     
     def validate(self, 
                 username: str, 
                 email_address: Optional[str] = None,
                 perform_email_verification: bool = False,
-                perform_ai_analysis: bool = True) -> ValidationResult:
+                perform_ai_analysis: bool = True,
+                ai_analyzer_type: Optional[str] = None,
+                ai_detail_level: str = "medium") -> ValidationResult:
         """
         Perform comprehensive validation of a Reddit persona.
         
@@ -162,6 +199,8 @@ class RedditPersonaValidator:
             email_address: Email address for verification (optional)
             perform_email_verification: Whether to verify email
             perform_ai_analysis: Whether to perform AI analysis
+            ai_analyzer_type: Specific AI analyzer to use (overrides config)
+            ai_detail_level: Level of AI analysis detail (none, basic, medium, full)
             
         Returns:
             ValidationResult containing all validation results
@@ -202,15 +241,38 @@ class RedditPersonaValidator:
                     result.warnings.append(f"Email verification failed: {email_result.error}")
             
             # 3. Perform AI analysis if requested
-            if perform_ai_analysis:
-                analysis_result = self._analyze_persona(account_info)
+            ai_enabled = self.config.get("ai", {}).get("enabled", True)
+            if perform_ai_analysis and ai_enabled:
+                # Override analyzer type if specified
+                if ai_analyzer_type:
+                    if hasattr(self.persona_scorer, "analyzer_type"):
+                        original_analyzer_type = self.persona_scorer.analyzer_type
+                        self.persona_scorer.analyzer_type = ai_analyzer_type
+                
+                # Perform analysis with specified detail level
+                analysis_result = self._analyze_persona(
+                    account_info, 
+                    detail_level=ai_detail_level
+                )
                 result.ai_analysis = analysis_result.get("ai_analysis")
+                
+                # Restore original analyzer type if it was overridden
+                if ai_analyzer_type and hasattr(self.persona_scorer, "analyzer_type"):
+                    self.persona_scorer.analyzer_type = original_analyzer_type
                 
                 # 4. Calculate final trust score
                 trust_score = self._calculate_trust_score(
                     account_info, 
                     email_verified=result.email_verified,
-                    ai_score=result.ai_analysis.get("viability_score") if result.ai_analysis else None
+                    ai_score=result.ai_analysis.get("viability_score") if result.ai_analysis else None,
+                    ai_analysis=result.ai_analysis
+                )
+                result.trust_score = trust_score
+            else:
+                # Calculate trust score without AI analysis
+                trust_score = self._calculate_trust_score(
+                    account_info,
+                    email_verified=result.email_verified
                 )
                 result.trust_score = trust_score
             
@@ -298,21 +360,60 @@ class RedditPersonaValidator:
                 error=str(e)
             )
     
-    def _analyze_persona(self, account_info: Dict[str, Any]) -> Dict[str, Any]:
+    def _analyze_persona(self, 
+                        account_info: Dict[str, Any],
+                        detail_level: str = "medium") -> Dict[str, Any]:
         """
-        Perform AI analysis of the persona.
+        Perform AI analysis of the persona with configurable detail level.
         
         Args:
             account_info: Account information dictionary
+            detail_level: Level of AI analysis detail (none, basic, medium, full)
             
         Returns:
             Dictionary with analysis results
         """
-        logger.info(f"Performing AI analysis for {account_info.get('username')}")
+        logger.info(f"Performing AI analysis for {account_info.get('username')} (detail: {detail_level})")
         
         try:
+            # Initialize the scorer
             scorer = self._init_persona_scorer()
-            return scorer.calculate_trust_score(account_info)
+            
+            # Get analysis configuration
+            analysis_config = self.config.get("analysis", {})
+            
+            # Extract content sample limit based on detail level
+            content_samples = {
+                "none": 0,
+                "basic": 3,
+                "medium": 10,
+                "full": 25
+            }.get(detail_level.lower(), 10)
+            
+            # Override with config if specified
+            if analysis_config.get("content_samples") and detail_level.lower() != "none":
+                content_samples = min(
+                    content_samples, 
+                    int(analysis_config.get("content_samples", 10))
+                )
+                
+            # Get user behavior metrics to analyze
+            user_behavior_metrics = analysis_config.get("user_behavior_metrics", [])
+            
+            # Configure analysis options
+            analysis_options = {
+                "detail_level": detail_level,
+                "content_samples": content_samples,
+                "behavior_metrics": user_behavior_metrics,
+                "sensitive_content_detection": analysis_config.get("sensitive_content_detection", True)
+            }
+            
+            # Perform analysis with options
+            if hasattr(scorer, "calculate_trust_score_with_options"):
+                return scorer.calculate_trust_score_with_options(account_info, analysis_options)
+            else:
+                return scorer.calculate_trust_score(account_info)
+                
         except Exception as e:
             logger.error(f"AI analysis failed: {str(e)}", exc_info=True)
             return {
@@ -326,7 +427,8 @@ class RedditPersonaValidator:
     def _calculate_trust_score(self, 
                               account_info: Dict[str, Any], 
                               email_verified: Optional[bool] = None,
-                              ai_score: Optional[float] = None) -> float:
+                              ai_score: Optional[float] = None,
+                              ai_analysis: Optional[Dict[str, Any]] = None) -> float:
         """
         Calculate final trust score based on all validation factors.
         
@@ -334,15 +436,17 @@ class RedditPersonaValidator:
             account_info: Account information dictionary
             email_verified: Whether email was verified
             ai_score: AI analysis viability score
+            ai_analysis: Complete AI analysis results
             
         Returns:
             Trust score between 0 and 100
         """
         # Load scoring weights from config
         scoring_config = self.config.get("scoring", {})
-        email_weight = scoring_config.get("email_verification_weight", 0.4)
-        age_weight = scoring_config.get("account_age_weight", 0.3)
-        karma_weight = scoring_config.get("karma_weight", 0.3)
+        email_weight = scoring_config.get("email_verification_weight", 0.3)
+        age_weight = scoring_config.get("account_age_weight", 0.2)
+        karma_weight = scoring_config.get("karma_weight", 0.2)
+        ai_weight = scoring_config.get("ai_analysis_weight", 0.3)
         
         # Calculate base scores
         email_score = 100 if email_verified else 0
@@ -355,18 +459,46 @@ class RedditPersonaValidator:
         karma = account_info.get("karma", 0)
         karma_score = min(100, (karma / 10000) * 100)
         
-        # Calculate weighted score
-        base_score = (
-            email_score * email_weight +
-            age_score * age_weight +
-            karma_score * karma_weight
-        )
-        
-        # If AI score is available, factor it in (70% base score, 30% AI score)
+        # Calculate AI component score if available
+        ai_component_score = 0
         if ai_score is not None:
-            final_score = (base_score * 0.7) + (ai_score * 0.3)
+            ai_component_score = ai_score
+        elif ai_analysis:
+            # Extract component scores if available
+            component_scores = []
+            if "content_coherence" in ai_analysis:
+                component_scores.append(ai_analysis["content_coherence"])
+            if "language_quality" in ai_analysis:
+                component_scores.append(ai_analysis["language_quality"])
+            if "account_consistency" in ai_analysis:
+                component_scores.append(ai_analysis["account_consistency"])
+            if "behavioral_patterns" in ai_analysis:
+                component_scores.append(ai_analysis["behavioral_patterns"])
+                
+            # Calculate average of available component scores
+            if component_scores:
+                ai_component_score = sum(component_scores) / len(component_scores)
+        
+        # Calculate weighted score
+        if ai_score is not None or ai_analysis:
+            # Include AI component in weighted score
+            final_score = (
+                email_score * email_weight +
+                age_score * age_weight +
+                karma_score * karma_weight +
+                ai_component_score * ai_weight
+            )
         else:
-            final_score = base_score
+            # No AI analysis, adjust weights
+            adjusted_email_weight = email_weight / (email_weight + age_weight + karma_weight)
+            adjusted_age_weight = age_weight / (email_weight + age_weight + karma_weight)
+            adjusted_karma_weight = karma_weight / (email_weight + age_weight + karma_weight)
+            
+            final_score = (
+                email_score * adjusted_email_weight +
+                age_score * adjusted_age_weight +
+                karma_score * adjusted_karma_weight
+            )
         
         return round(final_score, 1)
     
