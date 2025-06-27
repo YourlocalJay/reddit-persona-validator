@@ -27,7 +27,7 @@ import logging
 import sqlite3
 import asyncio
 import pickle
-from typing import Dict, List, Any, Optional, Union, Tuple, Set, cast
+from typing import Dict, List, Any, Optional, Union, Tuple, Set, cast, Protocol, Type
 from datetime import datetime, timedelta
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -44,7 +44,7 @@ logger = logging.getLogger("persona-validator-db")
 class DatabaseConfig(BaseModel):
     """Database configuration model."""
     
-    engine: str = Field("sqlite", description="Database engine (sqlite)")
+    engine: str = Field("sqlite", description="Database engine (sqlite or redis)")
     path: str = Field("data/validator.db", description="Database file path")
     cache_expiry: int = Field(86400, description="Cache expiry time in seconds (default: 24h)")
     pool_size: int = Field(5, description="Connection pool size")
@@ -84,6 +84,62 @@ class PerformanceMetric(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now, description="Creation timestamp")
 
 
+class DatabaseInterface(Protocol):
+    """Protocol defining the database interface."""
+    
+    async def initialize(self) -> None:
+        """Initialize the database."""
+        ...
+    
+    async def close(self) -> None:
+        """Close database connections."""
+        ...
+    
+    async def get_cached_validation(self, username: str) -> Optional[ValidationRecord]:
+        """Get cached validation result."""
+        ...
+    
+    async def store_validation_result(self, result: ValidationRecord) -> str:
+        """Store validation result."""
+        ...
+    
+    async def record_performance_metric(self, metric: PerformanceMetric) -> int:
+        """Record performance metric."""
+        ...
+    
+    async def get_performance_metrics(
+        self,
+        metric_type: Optional[str] = None,
+        operation: Optional[str] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100,
+        offset: int = 0
+    ) -> List[PerformanceMetric]:
+        """Get performance metrics."""
+        ...
+    
+    async def get_validation_statistics(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None
+    ) -> Dict[str, Any]:
+        """Get validation statistics."""
+        ...
+    
+    async def clean_expired_cache(self) -> int:
+        """Clean expired cache entries."""
+        ...
+    
+    async def get_recent_validations(
+        self,
+        limit: int = 10,
+        offset: int = 0
+    ) -> List[ValidationRecord]:
+        """Get recent validations."""
+        ...
+
+
 class Database:
     """Database manager for the Reddit Persona Validator."""
     
@@ -103,18 +159,36 @@ class Database:
         os.makedirs(os.path.dirname(config.path), exist_ok=True)
     
     @classmethod
-    def from_config(cls, config_path: str = "config/config.yaml") -> "Database":
+    def from_config(cls, config_path: str = "config/config.yaml") -> Union["Database", "DatabaseInterface"]:
         """
         Create a database instance from configuration file.
+        
+        This factory method returns either a SQLite or Redis implementation
+        based on the configuration.
         
         Args:
             config_path: Path to configuration file
             
         Returns:
-            Database instance
+            Database instance (SQLite or Redis)
         """
         config_data = ConfigLoader.load_config(config_path)
         db_config = DatabaseConfig(**config_data.get("database", {}))
+        
+        # Check if Redis is enabled and available
+        redis_config = config_data.get("database", {}).get("redis", {})
+        if db_config.engine == "redis" or redis_config.get("enabled", False):
+            try:
+                # Import Redis implementation
+                from .redis_store import RedisStore
+                logger.info("Using Redis storage backend")
+                return RedisStore.from_config(config_path)
+            except ImportError:
+                logger.warning("Redis package not installed, falling back to SQLite")
+                return cls(db_config)
+        
+        # Default to SQLite
+        logger.info("Using SQLite storage backend")
         return cls(db_config)
     
     async def initialize(self) -> None:
