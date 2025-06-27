@@ -50,11 +50,47 @@ pip install -r requirements.txt
 # Copy and configure environment variables
 cp config/.env.example config/.env
 # Edit config/.env with your API keys and settings
+```
 
-# Start the application (choose one)
-python src/interfaces/cli.py  # Command-line interface
-python src/interfaces/gui.py  # Graphical user interface
-python src/interfaces/api.py  # API server
+### Running the Application
+
+The application can be run in three different modes:
+
+```bash
+# Unified entry point (recommended)
+python main.py --cli     # Command-line interface
+python main.py --api     # API server
+python main.py --gui     # Graphical user interface
+
+# Or directly using the interface modules
+python -m src.interfaces.cli    # Command-line interface
+python -m src.interfaces.api    # API server
+python -m src.interfaces.gui    # Graphical user interface
+```
+
+#### CLI Mode Options
+
+```bash
+# Validate a single account
+python main.py --cli --username reddituser123
+
+# Batch process accounts from a file
+python main.py --cli --input accounts.txt --format json --output results.json
+
+# Get help with all CLI options
+python main.py --cli --help
+```
+
+#### API Mode
+
+The API server provides a RESTful interface with OpenAPI documentation:
+
+```bash
+# Start the API server
+python main.py --api
+
+# Access the API documentation
+# Open in browser: http://localhost:8000/docs
 ```
 
 ## Configuration
@@ -89,6 +125,34 @@ flake8 .
 
 # Generate documentation
 mkdocs build
+```
+
+## Project Structure
+
+```
+reddit-persona-validator/
+├── config/               # Configuration files
+├── docs/                 # Documentation
+├── infrastructure/       # Docker and deployment files
+├── samples/              # Sample input files
+├── src/
+│   ├── analysis/         # AI analysis modules
+│   ├── core/             # Core validation logic
+│   │   ├── browser_engine.py
+│   │   ├── email_verifier.py
+│   │   └── validator.py
+│   ├── interfaces/       # User interfaces
+│   │   ├── api.py        # FastAPI REST interface
+│   │   ├── cli.py        # Command-line interface
+│   │   └── gui.py        # PySimpleGUI interface
+│   └── utils/            # Utility modules
+│       ├── config_loader.py
+│       ├── cookie_manager.py
+│       └── proxy_rotator.py
+├── tests/                # Test suite
+├── main.py               # Unified entry point
+├── pyproject.toml        # Project metadata
+└── requirements.txt      # Dependencies
 ```
 
 ## License
