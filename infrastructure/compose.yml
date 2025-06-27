@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  validator-api:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../config:/app/config
+    environment:
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    command: python -m src.interfaces.api
+
+  validator-gui:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    volumes:
+      - ../config:/app/config
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY}
+    command: python -m src.interfaces.gui
+
+  # For development purposes only
+  dev-environment:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    volumes:
+      - ..:/app
+    command: tail -f /dev/null

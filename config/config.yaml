@@ -1,0 +1,55 @@
+# Configuration for Reddit Persona Validator
+
+# Reddit API settings
+reddit:
+  user_agent: "RedditPersonaValidator/0.1.0"
+  request_timeout: 30
+  captcha_timeout: 45
+
+# Email verification settings
+email:
+  imap_server: "outlook.office365.com"
+  imap_port: 993
+  connection_timeout: 30
+  verification_timeout: 300
+
+# AI Analysis settings
+ai:
+  deepseek:
+    api_timeout: 60
+    model: "deepseek-chat"
+    temperature: 0.2
+  claude:
+    api_timeout: 60
+    model: "claude-3-sonnet-20240229"
+    temperature: 0.1
+
+# Proxy settings
+proxy:
+  rotation_interval: 300
+  health_check_interval: 60
+  max_failures: 3
+  connection_timeout: 10
+
+# Scoring thresholds
+scoring:
+  min_account_age_days: 30
+  min_karma: 100
+  email_verification_weight: 0.4
+  account_age_weight: 0.3
+  karma_weight: 0.3
+  trust_threshold: 0.7
+
+# Interface settings
+interface:
+  cli:
+    log_level: "INFO"
+    progress_bar: true
+  gui:
+    theme: "DarkGrey9"
+    window_size: [800, 600]
+  api:
+    host: "0.0.0.0"
+    port: 8000
+    log_level: "INFO"
+    cors_origins: ["*"]
