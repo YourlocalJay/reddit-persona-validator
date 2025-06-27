@@ -1,6 +1,7 @@
 version: '3.8'
 
 services:
+  # API service
   validator-api:
     build:
       context: ..
@@ -9,27 +10,106 @@ services:
       - "8000:8000"
     volumes:
       - ../config:/app/config
+      - validator_data:/app/data
     environment:
       - LOG_LEVEL=INFO
+      - PYTHONPATH=/app
     restart: unless-stopped
     command: python -m src.interfaces.api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - validator_network
+    depends_on:
+      redis:
+        condition: service_healthy
 
+  # Dashboard service
+  validator-dashboard:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile
+    ports:
+      - "8050:8050"
+    volumes:
+      - ../config:/app/config
+      - validator_data:/app/data
+    environment:
+      - LOG_LEVEL=INFO
+      - PYTHONPATH=/app
+    restart: unless-stopped
+    command: python -m src.visualization.dashboard
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - validator_network
+    depends_on:
+      - validator-api
+
+  # GUI service (optional, requires X11 forwarding)
   validator-gui:
     build:
       context: ..
       dockerfile: infrastructure/Dockerfile
     volumes:
       - ../config:/app/config
+      - validator_data:/app/data
       - /tmp/.X11-unix:/tmp/.X11-unix
     environment:
       - DISPLAY=${DISPLAY}
+      - PYTHONPATH=/app
     command: python -m src.interfaces.gui
+    networks:
+      - validator_network
+    profiles:
+      - gui
 
-  # For development purposes only
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+    networks:
+      - validator_network
+
+  # Development environment (for debugging)
   dev-environment:
     build:
       context: ..
       dockerfile: infrastructure/Dockerfile
     volumes:
       - ..:/app
+      - validator_data:/app/data
     command: tail -f /dev/null
+    networks:
+      - validator_network
+    profiles:
+      - dev
+
+# Volumes for persistent data
+volumes:
+  validator_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# Networks
+networks:
+  validator_network:
+    driver: bridge
