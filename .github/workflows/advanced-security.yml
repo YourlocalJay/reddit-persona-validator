@@ -1,0 +1,108 @@
+name: "Advanced Security Scan"
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly Monday 3AM UTC
+
+jobs:
+  security-analysis:
+    name: Comprehensive Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+        
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 2
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .[dev]
+        pip install bandit safety detect-secrets
+
+    # --- Pre-Scan Checks ---
+    - name: Detect hardcoded secrets (preliminary)
+      run: |
+        grep -r --exclude-dir=.git \
+          -E "['\"]?(api[_-]?key|token|secret|password)['\"]?\s*[:=]\s*['\"]" . \
+          && echo "::warning::Potential secrets found. Verify these aren't actual credentials." \
+          || echo "No obvious secrets detected"
+
+    - name: Scan for secrets with detect-secrets
+      run: |
+        detect-secrets scan > .secrets.baseline
+        detect-secrets audit .secrets.baseline --json || true
+
+    # --- Core Security Scans ---
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v2
+      with:
+        languages: python
+        queries: +security-and-quality
+
+    - name: Run Bandit (fail on high/critical)
+      id: bandit
+      continue-on-error: true
+      run: |
+        bandit -r src/ -lll -iii -f json -o bandit-report.json
+        echo "bandit_results=$(jq -c '.metrics._totals' bandit-report.json)" >> $GITHUB_OUTPUT
+
+    - name: Evaluate Bandit results
+      run: |
+        echo "Bandit Summary: ${{ steps.bandit.outputs.bandit_results }}"
+        echo "${{ steps.bandit.outputs.bandit_results }}" | jq -e '.high > 0 or .critical > 0' \
+        && echo "::error::High/Critical vulnerabilities detected by Bandit" \
+        && exit 1 || echo "Bandit scan passed"
+
+    - name: Check dependencies with Safety
+      id: safety
+      run: |
+        safety check --full-report --output json > safety-report.json
+        echo "safety_results=$(jq '.vulnerabilities | length' safety-report.json)" >> $GITHUB_OUTPUT
+
+    - name: Evaluate Safety results
+      run: |
+        echo "Safety Summary: ${{ steps.safety.outputs.safety_results }}"
+        if [ "${{ steps.safety.outputs.safety_results }}" -gt 0 ]; then
+          echo "::error::Vulnerable dependencies detected"
+          exit 1
+        else
+          echo "Safety scan passed"
+        fi
+
+    # --- Post-Scan ---
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+      with:
+        category: "/language:python"
+        upload: true
+
+    - name: Upload scan artifacts
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: security-reports-${{ matrix.python-version }}
+        path: |
+          bandit-report.json
+          safety-report.json
+          .secrets.baseline
+        retention-days: 7
