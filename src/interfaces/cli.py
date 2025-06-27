@@ -7,6 +7,7 @@ with support for:
 - Multiple output formats (JSON, CSV, table)
 - Colorized and formatted output
 - Progress tracking
+- AI analysis with configurable options
 
 Example usage:
     # Validate a single account
@@ -14,6 +15,9 @@ Example usage:
     
     # Batch process accounts from a file
     python -m src.interfaces.cli --input accounts.txt --format json --output results.json
+    
+    # Validate with specific AI analyzer
+    python -m src.interfaces.cli --username reddituser123 --ai-analyzer claude --ai-detail full
 """
 
 import os
@@ -34,6 +38,8 @@ from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn
 from rich.logging import RichHandler
 from rich.panel import Panel
 from rich.text import Text
+from rich.tree import Tree
+from rich.syntax import Syntax
 
 # Validator core
 from ..core.validator import RedditPersonaValidator, ValidationResult
@@ -80,9 +86,13 @@ class PersonaValidatorCLI:
                 sys.exit(1)
         return self.validator
     
-    def validate_single_account(self, username: str, email: Optional[str] = None,
+    def validate_single_account(self, 
+                               username: str, 
+                               email: Optional[str] = None,
                                perform_email_verification: bool = False, 
-                               perform_ai_analysis: bool = True) -> ValidationResult:
+                               perform_ai_analysis: bool = True,
+                               ai_analyzer_type: Optional[str] = None,
+                               ai_detail_level: str = "medium") -> ValidationResult:
         """
         Validate a single Reddit account.
         
@@ -91,6 +101,8 @@ class PersonaValidatorCLI:
             email: Optional email to verify
             perform_email_verification: Whether to perform email verification
             perform_ai_analysis: Whether to perform AI analysis
+            ai_analyzer_type: Type of AI analyzer to use (deepseek, claude, mock)
+            ai_detail_level: Level of AI analysis detail (none, basic, medium, full)
             
         Returns:
             ValidationResult object containing validation results
@@ -103,7 +115,9 @@ class PersonaValidatorCLI:
                     username=username,
                     email_address=email,
                     perform_email_verification=perform_email_verification,
-                    perform_ai_analysis=perform_ai_analysis
+                    perform_ai_analysis=perform_ai_analysis,
+                    ai_analyzer_type=ai_analyzer_type,
+                    ai_detail_level=ai_detail_level
                 )
                 return result
             except Exception as e:
@@ -188,7 +202,7 @@ class PersonaValidatorCLI:
                 fieldnames = [
                     'username', 'exists', 'trust_score', 'email_verified', 
                     'age_days', 'karma', 'cake_day', 'verified_email',
-                    'warnings', 'errors'
+                    'ai_analysis_score', 'ai_analyzer_used', 'warnings', 'errors'
                 ]
                 
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -213,16 +227,24 @@ class PersonaValidatorCLI:
                             'verified_email': result.account_details.get('verified_email', '')
                         })
                     
+                    # Add AI analysis details if available
+                    if result.ai_analysis:
+                        row.update({
+                            'ai_analysis_score': result.ai_analysis.get('viability_score', ''),
+                            'ai_analyzer_used': result.ai_analysis.get('analyzer', '')
+                        })
+                    
                     writer.writerow(row)
         else:
             raise ValueError(f"Unsupported output format: {output_format}")
     
-    def _print_result_table(self, results: List[ValidationResult]) -> None:
+    def _print_result_table(self, results: List[ValidationResult], show_ai_details: bool = False) -> None:
         """
         Print validation results as a formatted table in the terminal.
         
         Args:
             results: List of ValidationResult objects
+            show_ai_details: Whether to show detailed AI analysis
         """
         table = Table(title="Reddit Persona Validation Results")
         
@@ -232,7 +254,10 @@ class PersonaValidatorCLI:
         table.add_column("Trust Score", style="magenta")
         table.add_column("Age (days)")
         table.add_column("Karma")
-        table.add_column("Verified Email")
+        table.add_column("Email Verified")
+        if show_ai_details:
+            table.add_column("AI Score", style="blue")
+            table.add_column("Analyzer")
         table.add_column("Status", style="yellow")
         
         # Add rows
@@ -253,22 +278,104 @@ class PersonaValidatorCLI:
             # Format trust score with color
             trust_score = str(result.trust_score) if result.trust_score is not None else "N/A"
             
-            # Add row
-            table.add_row(
+            # Prepare row data
+            row_data = [
                 result.username,
                 "✓" if result.exists else "✗",
                 trust_score,
                 str(result.account_details.get('age_days', 'N/A')) if result.account_details else "N/A",
                 str(result.account_details.get('karma', 'N/A')) if result.account_details else "N/A",
-                str(result.account_details.get('verified_email', 'N/A')) if result.account_details else "N/A",
-                Text(status, style=status_style)
-            )
+                "✓" if result.email_verified else "✗" if result.email_verified is not None else "N/A"
+            ]
+            
+            # Add AI details if requested
+            if show_ai_details:
+                ai_score = "N/A"
+                analyzer = "N/A"
+                if result.ai_analysis:
+                    ai_score = str(result.ai_analysis.get('viability_score', 'N/A'))
+                    analyzer = result.ai_analysis.get('analyzer', 'N/A')
+                row_data.extend([ai_score, analyzer])
+            
+            # Add status
+            row_data.append(Text(status, style=status_style))
+            
+            # Add row to table
+            table.add_row(*row_data)
         
         console.print(table)
+        
+        # If showing AI details and there are results with AI analysis, print detailed reports
+        if show_ai_details:
+            for result in results:
+                if result.ai_analysis and result.exists:
+                    self._print_ai_analysis_details(result)
     
-    def validate_batch(self, input_file: str, output_file: Optional[str] = None,
-                       output_format: str = 'table', perform_email_verification: bool = False,
-                       perform_ai_analysis: bool = True, max_workers: int = 1) -> List[ValidationResult]:
+    def _print_ai_analysis_details(self, result: ValidationResult) -> None:
+        """
+        Print detailed AI analysis for a validation result.
+        
+        Args:
+            result: ValidationResult object containing AI analysis
+        """
+        if not result.ai_analysis:
+            return
+            
+        ai_analysis = result.ai_analysis
+        
+        # Create a tree for structured display
+        tree = Tree(f"[bold cyan]AI Analysis for {result.username}[/bold cyan]")
+        
+        # Add viability score
+        viability_score = ai_analysis.get('viability_score')
+        if viability_score is not None:
+            score_color = "green" if viability_score >= 70 else "yellow" if viability_score >= 40 else "red"
+            tree.add(f"[bold {score_color}]Viability Score: {viability_score}[/bold {score_color}]")
+        
+        # Add best use cases
+        best_use_cases = ai_analysis.get('best_use_case', [])
+        if best_use_cases:
+            use_cases_node = tree.add("[bold blue]Best Use Cases[/bold blue]")
+            for use_case in best_use_cases:
+                use_cases_node.add(use_case)
+        
+        # Add risk factors
+        risk_factors = ai_analysis.get('risk_factors', [])
+        if risk_factors:
+            risks_node = tree.add("[bold red]Risk Factors[/bold red]")
+            for risk in risk_factors:
+                risks_node.add(risk)
+        
+        # Add maintenance notes
+        maintenance_notes = ai_analysis.get('maintenance_notes')
+        if maintenance_notes:
+            tree.add(f"[bold yellow]Maintenance Notes:[/bold yellow] {maintenance_notes}")
+        
+        # Add analysis timestamp
+        timestamp = ai_analysis.get('analysis_timestamp')
+        if timestamp:
+            tree.add(f"[dim]Analysis Time: {timestamp}[/dim]")
+        
+        # Add analyzer used
+        analyzer = ai_analysis.get('analyzer')
+        if analyzer:
+            tree.add(f"[dim]Analyzer: {analyzer}[/dim]")
+        
+        # Print the tree
+        console.print()
+        console.print(Panel(tree, title=f"AI Analysis Report", border_style="blue"))
+        console.print()
+    
+    def validate_batch(self, 
+                       input_file: str, 
+                       output_file: Optional[str] = None,
+                       output_format: str = 'table', 
+                       perform_email_verification: bool = False,
+                       perform_ai_analysis: bool = True, 
+                       ai_analyzer_type: Optional[str] = None,
+                       ai_detail_level: str = "medium",
+                       show_ai_details: bool = False,
+                       max_workers: int = 1) -> List[ValidationResult]:
         """
         Validate multiple Reddit accounts from an input file.
         
@@ -278,6 +385,9 @@ class PersonaValidatorCLI:
             output_format: Output format (json, csv, or table)
             perform_email_verification: Whether to perform email verification
             perform_ai_analysis: Whether to perform AI analysis
+            ai_analyzer_type: Type of AI analyzer to use (deepseek, claude, mock)
+            ai_detail_level: Level of AI analysis detail (none, basic, medium, full)
+            show_ai_details: Whether to show detailed AI analysis in terminal output
             max_workers: Maximum number of concurrent workers
             
         Returns:
@@ -326,7 +436,9 @@ class PersonaValidatorCLI:
                             account['username'],
                             account.get('email'),
                             perform_email_verification,
-                            perform_ai_analysis
+                            perform_ai_analysis,
+                            ai_analyzer_type,
+                            ai_detail_level
                         ): account for account in accounts
                     }
                     
@@ -355,7 +467,9 @@ class PersonaValidatorCLI:
                             username=username,
                             email=account.get('email'),
                             perform_email_verification=perform_email_verification,
-                            perform_ai_analysis=perform_ai_analysis
+                            perform_ai_analysis=perform_ai_analysis,
+                            ai_analyzer_type=ai_analyzer_type,
+                            ai_detail_level=ai_detail_level
                         )
                         results.append(result)
                     except Exception as e:
@@ -378,7 +492,7 @@ class PersonaValidatorCLI:
         
         # Print results as table if requested
         if output_format == 'table' or not output_file:
-            self._print_result_table(results)
+            self._print_result_table(results, show_ai_details=show_ai_details)
         
         return results
     
@@ -409,6 +523,9 @@ class PersonaValidatorCLI:
                     output_format=parsed_args.format,
                     perform_email_verification=parsed_args.verify_email,
                     perform_ai_analysis=parsed_args.ai_analysis,
+                    ai_analyzer_type=parsed_args.ai_analyzer,
+                    ai_detail_level=parsed_args.ai_detail,
+                    show_ai_details=parsed_args.show_ai_details,
                     max_workers=parsed_args.workers
                 )
             elif parsed_args.username:
@@ -417,7 +534,9 @@ class PersonaValidatorCLI:
                     username=parsed_args.username,
                     email=parsed_args.email,
                     perform_email_verification=parsed_args.verify_email,
-                    perform_ai_analysis=parsed_args.ai_analysis
+                    perform_ai_analysis=parsed_args.ai_analysis,
+                    ai_analyzer_type=parsed_args.ai_analyzer,
+                    ai_detail_level=parsed_args.ai_detail
                 )
                 
                 # Handle output
@@ -425,7 +544,7 @@ class PersonaValidatorCLI:
                     self._write_results([result], parsed_args.output, parsed_args.format)
                     console.print(f"[green]Result written to {parsed_args.output}[/green]")
                 else:
-                    self._print_result_table([result])
+                    self._print_result_table([result], show_ai_details=parsed_args.show_ai_details)
             else:
                 parser.print_help()
         except Exception as e:
@@ -489,6 +608,25 @@ class PersonaValidatorCLI:
             type=int,
             default=1,
             help="Number of concurrent validation workers (batch mode only)"
+        )
+        
+        # AI Analysis options
+        ai_group = parser.add_argument_group("AI Analysis Options")
+        ai_group.add_argument(
+            "--ai-analyzer",
+            choices=["deepseek", "claude", "mock"],
+            help="AI analyzer to use (overrides config)"
+        )
+        ai_group.add_argument(
+            "--ai-detail",
+            choices=["none", "basic", "medium", "full"],
+            default="medium",
+            help="Level of AI analysis detail"
+        )
+        ai_group.add_argument(
+            "--show-ai-details",
+            action="store_true",
+            help="Show detailed AI analysis results in terminal output"
         )
         
         # Logging options
