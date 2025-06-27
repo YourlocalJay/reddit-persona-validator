@@ -498,6 +498,29 @@ class PersonaValidatorCLI:
         if output_format == 'table' or not output_file:
             self._print_result_table(results, show_ai_details=show_ai_details)
 
+        # Optional histogram summary
+        from collections import Counter
+        from rich.bar import Bar
+        from rich.columns import Columns
+
+        # Optional histogram summary
+        if results:
+            score_bins = [0, 20, 40, 60, 80, 100]
+            bin_labels = ["0–20", "21–40", "41–60", "61–80", "81–100"]
+            bucket_counts = Counter()
+            for r in results:
+                if r.trust_score is not None:
+                    score = r.trust_score
+                    for i, upper in enumerate(score_bins[1:], 1):
+                        if score <= upper:
+                            bucket_counts[bin_labels[i - 1]] += 1
+                            break
+            histogram = [
+                Bar(size=bucket_counts.get(label, 0), total=len(results), label=label)
+                for label in bin_labels
+            ]
+            console.print(Panel(Columns(histogram), title="Trust Score Distribution", border_style="cyan"))
+
         return results
 
     def run(self, args: Optional[List[str]] = None) -> None:

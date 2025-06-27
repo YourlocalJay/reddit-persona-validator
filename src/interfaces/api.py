@@ -33,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, validator, EmailStr, ConfigDict
+from fastapi.middleware.gzip import GZipMiddleware
 
 # Import the validator
 from ..core.validator import RedditPersonaValidator, ValidationResult
@@ -51,6 +52,9 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
+# Add GZip compression middleware
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
 # Define API models
 class EmailVerificationRequest(BaseModel):
     """Model for email verification request."""
@@ -65,7 +69,7 @@ class ValidationRequest(BaseModel):
     verify_email: bool = Field(False, description="Whether to verify email")
     perform_ai_analysis: bool = Field(True, description="Whether to perform AI analysis")
     model_config = ConfigDict(extra="forbid")
-    
+
     @validator("username")
     def username_must_be_valid(cls, v):
         """Validate the username format."""
@@ -81,7 +85,7 @@ class BatchValidationRequest(BaseModel):
     accounts: List[ValidationRequest] = Field(..., description="List of accounts to validate")
     max_concurrent: int = Field(3, description="Maximum number of concurrent validations")
     model_config = ConfigDict(extra="forbid")
-    
+
     @validator("max_concurrent")
     def max_concurrent_must_be_valid(cls, v):
         """Validate the max_concurrent value."""
@@ -161,7 +165,7 @@ def setup_cors():
     config = get_config()
     api_config = config.get("interface", {}).get("api", {})
     origins = api_config.get("cors_origins", ["*"])
-    
+
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
@@ -174,31 +178,31 @@ def setup_cors():
 def verify_api_key(api_key: str = Depends(api_key_header)) -> bool:
     """
     Verify the API key.
-    
+
     Args:
         api_key: API key from request header
-        
+
     Returns:
         True if API key is valid
-        
+
     Raises:
         HTTPException: If API key is invalid
     """
     config = get_config()
     api_config = config.get("interface", {}).get("api", {})
     valid_keys = api_config.get("api_keys", [])
-    
+
     # If no API keys configured, allow all requests
     if not valid_keys:
         return True
-    
+
     if api_key not in valid_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     return True
 
 
@@ -207,7 +211,7 @@ def verify_api_key(api_key: str = Depends(api_key_header)) -> bool:
 def get_validator():
     """
     Initialize and cache the validator instance.
-    
+
     Returns:
         RedditPersonaValidator instance
     """
@@ -224,17 +228,17 @@ def get_validator():
 async def validate_account_async(validator: RedditPersonaValidator, request: ValidationRequest) -> ValidationResponse:
     """
     Validate a Reddit account asynchronously.
-    
+
     Args:
         validator: Validator instance
         request: Validation request
-        
+
     Returns:
         ValidationResponse with results
     """
     # Create a unique request ID
     request_id = str(uuid.uuid4())
-    
+
     try:
         # Run the validation in a thread pool
         result = await asyncio.to_thread(
@@ -244,7 +248,7 @@ async def validate_account_async(validator: RedditPersonaValidator, request: Val
             perform_email_verification=request.verify_email,
             perform_ai_analysis=request.perform_ai_analysis
         )
-        
+
         # Convert ValidationResult to ValidationResponse
         return ValidationResponse(
             request_id=request_id,
@@ -273,44 +277,44 @@ async def validate_account_async(validator: RedditPersonaValidator, request: Val
 async def process_batch_validation(batch_id: str, request: BatchValidationRequest):
     """
     Process a batch validation request asynchronously.
-    
+
     Args:
         batch_id: Unique batch ID
         request: Batch validation request
     """
     validator = get_validator()
-    
+
     # Update the batch job status
     batch_jobs[batch_id].status = "processing"
     batch_jobs[batch_id].updated_at = datetime.now()
-    
+
     results = []
-    
+
     try:
         # Process accounts with concurrency limit
         semaphore = asyncio.Semaphore(request.max_concurrent)
-        
+
         async def process_with_semaphore(account):
             async with semaphore:
                 return await validate_account_async(validator, account)
-        
+
         # Create tasks for all accounts
         tasks = [process_with_semaphore(account) for account in request.accounts]
-        
+
         # Process accounts
         for i, future in enumerate(asyncio.as_completed(tasks)):
             result = await future
             results.append(result)
-            
+
             # Update the batch job status
             batch_jobs[batch_id].processed_accounts = i + 1
             batch_jobs[batch_id].updated_at = datetime.now()
-        
+
         # Update the batch job with results
         batch_jobs[batch_id].status = "completed"
         batch_jobs[batch_id].results = results
         batch_jobs[batch_id].updated_at = datetime.now()
-        
+
     except Exception as e:
         logger.error(f"Batch validation failed: {str(e)}")
         batch_jobs[batch_id].status = "failed"
@@ -323,7 +327,7 @@ async def process_batch_validation(batch_id: str, request: BatchValidationReques
 async def get_status():
     """
     Get API status.
-    
+
     Returns:
         StatusResponse with API status
     """
@@ -332,6 +336,13 @@ async def get_status():
         version="1.0.0",
         timestamp=datetime.now()
     )
+
+
+# Health check endpoint
+@app.get("/healthz", tags=["Status"])
+async def health_check():
+    """Basic health check endpoint."""
+    return {"status": "ok"}
 
 
 @app.post(
@@ -343,10 +354,10 @@ async def get_status():
 async def validate_account(request: ValidationRequest):
     """
     Validate a single Reddit account.
-    
+
     Args:
         request: Validation request
-        
+
     Returns:
         ValidationResponse with validation results
     """
@@ -363,17 +374,17 @@ async def validate_account(request: ValidationRequest):
 async def batch_validate(request: BatchValidationRequest, background_tasks: BackgroundTasks):
     """
     Start a batch validation process.
-    
+
     Args:
         request: Batch validation request
         background_tasks: FastAPI background tasks
-        
+
     Returns:
         BatchValidationResponse with batch job ID and status
     """
     # Create a unique batch ID
     batch_id = str(uuid.uuid4())
-    
+
     # Create a batch job record
     batch_job = BatchValidationResponse(
         request_id=batch_id,
@@ -383,13 +394,13 @@ async def batch_validate(request: BatchValidationRequest, background_tasks: Back
         created_at=datetime.now(),
         updated_at=datetime.now()
     )
-    
+
     # Store the batch job
     batch_jobs[batch_id] = batch_job
-    
+
     # Start the batch validation in the background
     background_tasks.add_task(process_batch_validation, batch_id, request)
-    
+
     return batch_job
 
 
@@ -402,13 +413,13 @@ async def batch_validate(request: BatchValidationRequest, background_tasks: Back
 async def get_batch_status(batch_id: str):
     """
     Get the status of a batch validation job.
-    
+
     Args:
         batch_id: Batch job ID
-        
+
     Returns:
         BatchValidationResponse with current status
-        
+
     Raises:
         HTTPException: If batch job not found
     """
@@ -417,7 +428,7 @@ async def get_batch_status(batch_id: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Batch job with ID {batch_id} not found"
         )
-    
+
     return batch_jobs[batch_id]
 
 
@@ -433,23 +444,23 @@ async def list_batch_jobs(
 ):
     """
     List batch validation jobs.
-    
+
     Args:
         status: Optional status filter
         limit: Maximum number of jobs to return
-        
+
     Returns:
         List of BatchValidationResponse objects
     """
     jobs = list(batch_jobs.values())
-    
+
     # Apply status filter if provided
     if status:
         jobs = [job for job in jobs if job.status == status]
-    
+
     # Sort by creation time (newest first)
     jobs.sort(key=lambda job: job.created_at, reverse=True)
-    
+
     # Apply limit
     return jobs[:limit]
 
@@ -486,23 +497,23 @@ async def general_exception_handler(request: Request, exc: Exception):
 async def log_requests(request: Request, call_next):
     """Log requests and responses."""
     start_time = time.time()
-    
+
     # Get request details
     method = request.method
     url = str(request.url)
-    
+
     # Process the request
     response = await call_next(request)
-    
+
     # Calculate processing time
     process_time = time.time() - start_time
-    
+
     # Log the request
     logger.info(
         f"{method} {url} - Status: {response.status_code} - "
         f"Processed in {process_time:.4f}s"
     )
-    
+
     return response
 
 
@@ -516,23 +527,26 @@ async def startup_event():
         level=getattr(logging, log_level),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Set up CORS
     setup_cors()
-    
-    # Clean up expired batch jobs periodically
-    @app.on_event("startup")
-    @app.on_event("shutdown")
-    async def cleanup_batch_jobs():
-        """Clean up expired batch jobs."""
-        expiration_time = datetime.now() - timedelta(days=1)
-        expired_jobs = [job_id for job_id, job in batch_jobs.items() 
-                       if job.updated_at < expiration_time]
-        
-        for job_id in expired_jobs:
-            del batch_jobs[job_id]
-            logger.info(f"Cleaned up expired batch job: {job_id}")
-    
+
+    # Clean up expired batch jobs periodically as a background thread
+    import threading
+
+    def cleanup_batch_jobs():
+        """Clean up expired batch jobs periodically."""
+        while True:
+            expiration_time = datetime.now() - timedelta(days=1)
+            expired_jobs = [job_id for job_id, job in batch_jobs.items()
+                            if job.updated_at < expiration_time]
+            for job_id in expired_jobs:
+                del batch_jobs[job_id]
+                logger.info(f"Cleaned up expired batch job: {job_id}")
+            time.sleep(3600)  # Run hourly
+
+    threading.Thread(target=cleanup_batch_jobs, daemon=True).start()
+
     logger.info("API started successfully")
 
 
@@ -546,11 +560,11 @@ def run_app():
     """Run the FastAPI app with uvicorn."""
     config = get_config()
     api_config = config.get("interface", {}).get("api", {})
-    
+
     host = api_config.get("host", "0.0.0.0")
     port = api_config.get("port", 8000)
     log_level = api_config.get("log_level", "info").lower()
-    
+
     uvicorn.run("src.interfaces.api:app", host=host, port=port, log_level=log_level, reload=True)
 
 
