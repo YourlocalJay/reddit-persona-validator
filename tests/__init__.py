@@ -1,1 +1,3 @@
-# Tests package initialization
+"""
+Test suite for the Reddit Persona Validator.
+"""
