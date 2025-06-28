@@ -1,3 +1,3 @@
-"""Reddit Persona Validator package."""
-
-__version__ = "0.1.0"
+"""
+Source code for the Reddit Persona Validator.
+"""
