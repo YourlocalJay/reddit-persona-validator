@@ -1,168 +1,145 @@
-# Reddit Persona Validator
+# Advanced Proxy Loader for Web Automation
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
-![Python](https://img.shields.io/badge/Python-3.10+-green)
-![License](https://img.shields.io/badge/license-MIT-orange)
-
-A comprehensive system for validating Reddit personas with Hotmail email verification and AI-powered analysis.
-
-![GUI Demo](docs/IMAGES/gui_demo.gif)
+A robust, feature-rich proxy management system designed for stealth web automation and scraping projects. Optimized for use with Oxylabs residential proxies but adaptable to any proxy provider.
 
 ## Features
 
-- **Multi-mode Validation**: Choose between CLI, GUI, or API interfaces
-- **AI-powered Persona Analysis**: Leverages DeepSeek and Claude APIs for content evaluation
-- **Email Verification**: Confirms Reddit accounts with linked Hotmail addresses
-- **Encrypted Session Storage**: Securely manages cookies and authentication data
-- **Proxy Management**: Built-in rotation with health checks
-- **Trust Scoring**: Algorithm combining multiple validation factors
+- **Multiple Authentication Schemes**: Support for username/password authentication with optional customer prefixing
+- **Smart Proxy Selection**: Filter proxies by country, datacenter, or IP version
+- **Rotation Strategies**: Sequential or random proxy rotation
+- **Proxy Health Management**: Automatic blacklisting of failed proxies
+- **Comprehensive Logging**: Detailed logging for monitoring and debugging
+- **Production-Ready Code**: Fully type-annotated with extensive documentation and unit tests
 
-## Quick Start
+## Installation
 
-### Using Docker (Recommended)
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/YourlocalJay/reddit-persona-validator.git
+   cd reddit-persona-validator
+   ```
+
+2. Install the required dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+3. Configure your environment variables:
+   ```bash
+   export OXYLABS_USERNAME="your_username"
+   export OXYLABS_PASSWORD="your_password"
+   export OXYLABS_CUSTOMER="your_customer_id"  # Optional
+   ```
+
+## Usage
+
+### Basic Usage
+
+```python
+from src.utils.proxy_loader import ProxyLoader
+
+# Initialize the proxy loader
+loader = ProxyLoader("config/proxies.json")
+
+# Load and filter proxies
+proxies = loader.load_proxies(
+    country_filter="US",  # Optional: filter by country
+    protocol="http",      # Optional: http, https, or socks5
+    shuffle=True          # Optional: randomize proxy order
+)
+
+# Get the next proxy in the rotation
+proxy = loader.get_next_proxy()
+
+# Use the proxy with your HTTP client
+response = requests.get("https://example.com", proxies={"http": proxy, "https": proxy})
+```
+
+### Advanced Usage with Blacklisting
+
+```python
+from src.utils.proxy_loader import ProxyLoader, NoProxiesAvailableError
+
+loader = ProxyLoader("config/proxies.json")
+proxies = loader.load_proxies()
+
+try:
+    # Attempt to make a request with a proxy
+    proxy = loader.get_next_proxy()
+    response = make_request(url, proxy=proxy)
+    
+    # If the proxy is detected or blocked, blacklist it
+    if response.status_code in (403, 407, 429, 502, 503, 504):
+        loader.blacklist_proxy(proxy)
+        
+        # Get a new proxy and retry
+        proxy = loader.get_next_proxy()
+        response = make_request(url, proxy=proxy)
+        
+except Exception as e:
+    # If an exception occurs, blacklist the proxy
+    loader.blacklist_proxy(proxy)
+    
+    # If we're running low on proxies, reload the list
+    if loader.get_proxy_count() < 3:
+        try:
+            loader.reload_proxies()
+        except NoProxiesAvailableError:
+            logger.error("No more proxies available")
+```
+
+### Example Web Scraper
+
+Check out the [examples/web_scraping.py](examples/web_scraping.py) script for a complete example of how to use the proxy loader for web scraping with error handling and proxy rotation.
+
+Run the example:
 
 ```bash
-# Clone the repository
-git clone https://github.com/YourlocalJay/reddit-persona-validator.git
-cd reddit-persona-validator
-
-# Start all services
-docker compose up -d
-
-# Access the API documentation
-# Open in browser: http://localhost:8000/docs
+python examples/web_scraping.py --country US --protocol https
 ```
 
-### Manual Installation
+## Proxy Configuration
+
+The proxy configuration file should be a JSON array of proxy objects. Each proxy object should have at least the following fields:
+
+```json
+[
+  {
+    "ip": "123.123.123.123",
+    "port": 10000,
+    "countryCode": "US",
+    "dc": "dc1"
+  },
+  ...
+]
+```
+
+Additional fields can be included for more advanced filtering:
+
+```json
+{
+  "ip": "123.123.123.123",
+  "port": 10000,
+  "countryCode": "US",
+  "dc": "dc1",
+  "health": 100,
+  "lastChecked": "2025-06-01T12:00:00Z",
+  "tags": ["residential", "high-speed"]
+}
+```
+
+## Testing
+
+Run the unit tests:
 
 ```bash
-# Clone the repository
-git clone https://github.com/YourlocalJay/reddit-persona-validator.git
-cd reddit-persona-validator
-
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy and configure environment variables
-cp config/.env.example config/.env
-# Edit config/.env with your API keys and settings
-```
-
-### Running the Application
-
-The application can be run in three different modes:
-
-```bash
-# Unified entry point (recommended)
-python main.py --cli     # Command-line interface
-python main.py --api     # API server
-python main.py --gui     # Graphical user interface
-
-# Or directly using the interface modules
-python -m src.interfaces.cli    # Command-line interface
-python -m src.interfaces.api    # API server
-python -m src.interfaces.gui    # Graphical user interface
-```
-
-#### CLI Mode Options
-
-```bash
-# Validate a single account
-python main.py --cli --username reddituser123
-
-# Batch process accounts from a file
-python main.py --cli --input accounts.txt --format json --output results.json
-
-# Get help with all CLI options
-python main.py --cli --help
-```
-
-#### API Mode
-
-The API server provides a RESTful interface with OpenAPI documentation:
-
-```bash
-# Start the API server
-python main.py --api
-
-# Access the API documentation
-# Open in browser: http://localhost:8000/docs
-```
-
-## Configuration
-
-Edit `config/config.yaml` to customize:
-
-- Connection timeouts
-- Proxy settings
-- AI analysis parameters
-- Scoring thresholds
-- Interface preferences
-
-## Documentation
-
-- [Setup Guide](docs/SETUP.md) - Detailed installation instructions
-- [Architecture](docs/ARCHITECTURE.md) - System design and components
-- [API Reference](docs/API.md) - Endpoint documentation
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
-
-## Development
-
-```bash
-# Install development dependencies
-pip install -r requirements-dev.txt
-
-# Run tests
-pytest
-
-# Check code style
-black .
-flake8 .
-
-# Generate documentation
-mkdocs build
-```
-
-## Project Structure
-
-```
-reddit-persona-validator/
-├── config/               # Configuration files
-├── docs/                 # Documentation
-├── infrastructure/       # Docker and deployment files
-├── samples/              # Sample input files
-├── src/
-│   ├── analysis/         # AI analysis modules
-│   ├── core/             # Core validation logic
-│   │   ├── browser_engine.py
-│   │   ├── email_verifier.py
-│   │   └── validator.py
-│   ├── interfaces/       # User interfaces
-│   │   ├── api.py        # FastAPI REST interface
-│   │   ├── cli.py        # Command-line interface
-│   │   └── gui.py        # PySimpleGUI interface
-│   └── utils/            # Utility modules
-│       ├── config_loader.py
-│       ├── cookie_manager.py
-│       └── proxy_rotator.py
-├── tests/                # Test suite
-├── main.py               # Unified entry point
-├── pyproject.toml        # Project metadata
-└── requirements.txt      # Dependencies
+pytest -xvs tests/test_proxy_loader.py
 ```
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) file for details.
+MIT
 
-## Contributing
+## Disclaimer
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Commit changes: `git commit -am 'Add new feature'`
-4. Push to branch: `git push origin feature/my-feature`
-5. Submit a pull request
+This tool is intended for legitimate web automation and scraping purposes only. Always respect website terms of service, rate limits, and legal requirements when conducting web scraping activities.
