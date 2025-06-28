@@ -1,0 +1,56 @@
+[
+  {
+    "ip": "123.123.123.123",
+    "port": 10000,
+    "countryCode": "US",
+    "dc": "dc1",
+    "health": 100,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["residential", "high-speed"]
+  },
+  {
+    "ip": "124.124.124.124",
+    "port": 10000,
+    "countryCode": "UK",
+    "dc": "dc1",
+    "health": 98,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["residential", "high-speed"]
+  },
+  {
+    "ip": "125.125.125.125",
+    "port": 10000,
+    "countryCode": "CA",
+    "dc": "dc2",
+    "health": 95,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["residential"]
+  },
+  {
+    "ip": "126.126.126.126",
+    "port": 10000,
+    "countryCode": "US",
+    "dc": "dc2",
+    "health": 100,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["datacenter", "high-speed"]
+  },
+  {
+    "ip": "127.127.127.127",
+    "port": 10000,
+    "countryCode": "DE",
+    "dc": "dc3",
+    "health": 90,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["residential"]
+  },
+  {
+    "ip": "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+    "port": 10000,
+    "countryCode": "US",
+    "dc": "dc1",
+    "health": 100,
+    "lastChecked": "2025-06-01T12:00:00Z",
+    "tags": ["residential", "ipv6"]
+  }
+]
